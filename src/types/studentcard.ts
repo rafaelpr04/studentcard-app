@@ -21,6 +21,8 @@ export interface Estudante {
     telefone: string
     universidade: string
     url_foto?: string
+    url_comprovante_pdf: string
+    dias_aula: string
 }
 
 export interface Carteirinha {

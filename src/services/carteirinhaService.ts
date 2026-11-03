@@ -3,16 +3,49 @@ import type { Carteirinha, Estudante, ValidarQrCodeResult } from '../types/stude
 
 export const carteirinhaService = {
   /**
-   * Cadastra o estudante e solicita uma nova carteirinha com status PENDENTE.
+   * Envia o PDF do comprovante de matrícula para o Supabase Storage.
+   */
+  async uploadComprovantePdf(file: File): Promise<string> {
+    const fileExt = file.name.split('.').pop()
+    const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
+    const filePath = `documentos/${fileName}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('comprovantes')
+      .upload(filePath, file)
+
+    if (uploadError) {
+      console.error('Erro no upload do PDF:', uploadError.message)
+      throw new Error('Falha ao enviar o comprovante de matrícula.')
+    }
+
+    const { data } = supabase.storage
+      .from('comprovantes')
+      .getPublicUrl(filePath)
+
+    return data.publicUrl
+  },
+
+  /**
+   * Cadastra o estudante com o comprovante em PDF e solicita a carteirinha com status PENDENTE.
    */
   async solicitarCarteirinha(
-    dadosEstudante: Omit<Estudante, 'id' | 'criado_em'>,
+    dadosEstudante: Omit<Estudante, 'id' | 'criado_em' | 'url_comprovante_pdf'>,
+    arquivoPdf: File,
     dataValidade: string
   ): Promise<Carteirinha | null> {
-    // 1. Insere o estudante
+    // 1. Upload do comprovante em PDF
+    const urlComprovantePdf = await this.uploadComprovantePdf(arquivoPdf)
+
+    // 2. Insere o estudante incluindo a URL do PDF
     const { data: estudante, error: errEstudante } = await supabase
       .from('estudantes')
-      .insert([dadosEstudante])
+      .insert([
+        {
+          ...dadosEstudante,
+          url_comprovante_pdf: urlComprovantePdf
+        }
+      ])
       .select()
       .single()
 
@@ -21,10 +54,10 @@ export const carteirinhaService = {
       throw new Error(errEstudante.message)
     }
 
-    // 2. Gera um número de carteirinha simples (Ano + 4 dígitos aleatórios)
+    // 3. Gera número da carteirinha
     const numeroCarteirinha = `${new Date().getFullYear()}${Math.floor(1000 + Math.random() * 9000)}`
 
-    // 3. Insere a carteirinha vinculada ao estudante
+    // 4. Insere a carteirinha vinculada ao estudante com status PENDENTE
     const { data: carteirinha, error: errCarteirinha } = await supabase
       .from('carteirinhas')
       .insert([
@@ -60,14 +93,14 @@ export const carteirinhaService = {
       return null
     }
 
-    const hoje = new Date().toISOString().split('T')[0]
-    const estaExpirada = data.data_validade < data.hoje
+    const hoje = new Date().toISOString().split('T')[0]!
+    const estaExpirada = data.data_validade < hoje
     const documentoValido = data.status === 'ATIVA' && !estaExpirada
 
     return {
       status: estaExpirada ? 'EXPIRADA' : data.status,
       nomeEstudante: data.estudantes.nome,
-      nomeUniversidade: data.estudantes.nome_universidade,
+      nomeUniversidade: data.estudantes.universidade || data.estudantes.universidade,
       dataValidade: data.data_validade,
       urlFoto: data.estudantes.url_foto,
       documentoValido
